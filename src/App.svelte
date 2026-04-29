@@ -136,7 +136,7 @@
       showAddPlayer = false;
       showAddToQueue = false;
       showRemoveFromQueue = false;
-      showMatchResult = false;
+      confirmWinnerIndex = null;
     }
   }
 
@@ -168,11 +168,16 @@
   let showAddPlayer = $state(false);
   let showAddToQueue = $state(false);
   let showRemoveFromQueue = $state(false);
-  let showMatchResult = $state(false);
+
+  let confirmWinnerIndex = $state(null);
 
   let newPlayerName = $state("");
   let selectedToAdd = $state([]);
   let selectedToRemove = $state([]);
+
+  let searchAddToQueue = $state("");
+  let searchRemoveFromQueue = $state("");
+  let searchPlayers = $state("");
 
   let isAddingPlayer = $state(false);
   let isRecordingMatch = $state(false);
@@ -251,7 +256,7 @@
     if (isRecordingMatch) return;
 
     isRecordingMatch = true;
-    showMatchResult = false;
+    confirmWinnerIndex = null;
 
     try {
       const winner = queue[winnerIndex];
@@ -305,39 +310,69 @@
         {/if}
 
         {#each queue as player, i}
-          <div class="queue-card" class:active={i < 2}>
-            <span class="pos">{i + 1}</span>
-            <span class="pname">{player.name}</span>
-            <div class="reorder-btns">
-              <button
-                class="arrow-btn"
-                onclick={() => moveUp(i)}
-                disabled={i === 0}>▲</button
-              >
-              <button
-                class="arrow-btn"
-                onclick={() => moveDown(i)}
-                disabled={i === queue.length - 1}>▼</button
-              >
+          {#if i < 2 && queue.length >= 2}
+            <div
+              class="queue-card active clickable"
+              role="button"
+              tabindex="0"
+              onclick={() => (confirmWinnerIndex = i)}
+              onkeydown={(e) => {
+                if (e.key === "Enter") confirmWinnerIndex = i;
+              }}
+            >
+              <span class="pos">{i + 1}</span>
+              <span class="pname">{player.name}</span>
+
+              <div class="reorder-btns">
+                <button
+                  class="arrow-btn"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    moveUp(i);
+                  }}
+                  disabled={i === 0}>▲</button
+                >
+                <button
+                  class="arrow-btn"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    moveDown(i);
+                  }}
+                  disabled={i === queue.length - 1}>▼</button
+                >
+              </div>
             </div>
-          </div>
+          {:else}
+            <div class="queue-card">
+              <span class="pos">{i + 1}</span>
+              <span class="pname">{player.name}</span>
+
+              <div class="reorder-btns">
+                <button
+                  class="arrow-btn"
+                  onclick={() => moveUp(i)}
+                  disabled={i === 0}>▲</button
+                >
+                <button
+                  class="arrow-btn"
+                  onclick={() => moveDown(i)}
+                  disabled={i === queue.length - 1}>▼</button
+                >
+              </div>
+            </div>
+          {/if}
           {#if i === 0 && queue.length > 1}
             <div class="vs-divider">vs</div>
           {/if}
         {/each}
       </div>
 
-      {#if queue.length >= 2}
-        <button class="btn btn-match" onclick={() => (showMatchResult = true)}>
-          Registrar resultado
-        </button>
-      {/if}
-
       <div class="queue-actions">
         <button
           class="btn"
           onclick={() => {
             selectedToAdd = [];
+            searchAddToQueue = "";
             showAddToQueue = true;
           }}
         >
@@ -347,6 +382,7 @@
           class="btn btn-outline"
           onclick={() => {
             selectedToRemove = [];
+            searchRemoveFromQueue = "";
             showRemoveFromQueue = true;
           }}
         >
@@ -361,10 +397,21 @@
     <section class="panel players-panel">
       <h2>Jogadores</h2>
 
+      <div class="search-bar">
+        <input
+          type="text"
+          placeholder="Pesquisar jogador..."
+          bind:value={searchPlayers}
+        />
+      </div>
+
       <div class="players-table">
         {#if players.length === 0}
           <p class="empty">Nenhum jogador cadastrado.</p>
         {:else}
+          {@const filteredPlayers = players.filter((p) =>
+            p.name.toLowerCase().includes(searchPlayers.toLowerCase()),
+          )}
           <table>
             <thead>
               <tr>
@@ -378,7 +425,7 @@
               </tr>
             </thead>
             <tbody>
-              {#each players as p, i}
+              {#each filteredPlayers as p, i}
                 {@const rank = getRank(p.elo)}
 
                 <tr>
@@ -402,6 +449,13 @@
                   <td>{p.elo}</td>
                 </tr>
               {/each}
+              {#if filteredPlayers.length === 0}
+                <tr>
+                  <td colspan="7" class="empty-row"
+                    >Nenhum resultado encontrado.</td
+                  >
+                </tr>
+              {/if}
             </tbody>
           </table>
         {/if}
@@ -462,8 +516,20 @@
       {#if players.filter((p) => !queue.includes(p)).length === 0}
         <p class="empty">Todos os jogadores já estão na fila.</p>
       {:else}
+        {@const availablePlayers = players
+          .filter((p) => !queue.includes(p))
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .filter((p) =>
+            p.name.toLowerCase().includes(searchAddToQueue.toLowerCase()),
+          )}
+        <input
+          class="modal-search"
+          type="text"
+          placeholder="Pesquisar..."
+          bind:value={searchAddToQueue}
+        />
         <div class="select-list">
-          {#each players.filter((p) => !queue.includes(p)) as p}
+          {#each availablePlayers as p}
             <label class="select-item">
               <input
                 type="checkbox"
@@ -473,6 +539,8 @@
               />
               {p.name}
             </label>
+          {:else}
+            <p class="empty-small">Nenhum resultado encontrado.</p>
           {/each}
         </div>
       {/if}
@@ -505,8 +573,19 @@
       {#if queue.length === 0}
         <p class="empty">Fila vazia.</p>
       {:else}
+        {@const filteredQueue = [...queue]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .filter((p) =>
+            p.name.toLowerCase().includes(searchRemoveFromQueue.toLowerCase()),
+          )}
+        <input
+          class="modal-search"
+          type="text"
+          placeholder="Pesquisar..."
+          bind:value={searchRemoveFromQueue}
+        />
         <div class="select-list">
-          {#each queue as p}
+          {#each filteredQueue as p}
             <label class="select-item">
               <input
                 type="checkbox"
@@ -516,6 +595,8 @@
               />
               {p.name}
             </label>
+          {:else}
+            <p class="empty-small">Nenhum resultado encontrado.</p>
           {/each}
         </div>
       {/if}
@@ -536,28 +617,34 @@
   </div>
 {/if}
 
-{#if showMatchResult && queue.length >= 2}
+{#if confirmWinnerIndex !== null && queue.length >= 2}
   <div class="modal-root">
     <button
       type="button"
       class="overlay"
-      onclick={() => (showMatchResult = false)}
+      onclick={() => (confirmWinnerIndex = null)}
       aria-label="Fechar modal"
     ></button>
-    <div class="modal match-modal">
-      <h3>Quem ganhou?</h3>
-      <div class="match-choice">
-        <button class="winner-btn" onclick={() => recordWinner(0)}
-          >{queue[0].name}</button
+    <div class="modal confirm-modal">
+      <h3>Confirmar vitória</h3>
+      <p class="confirm-text">
+        <strong>{queue[confirmWinnerIndex].name}</strong> ganhou a partida?
+      </p>
+      <div class="modal-actions">
+        <button
+          class="btn btn-match"
+          onclick={() => recordWinner(confirmWinnerIndex)}
+          disabled={isRecordingMatch}
         >
-        <span class="vs-text">vs</span>
-        <button class="winner-btn" onclick={() => recordWinner(1)}
-          >{queue[1].name}</button
+          Sim
+        </button>
+        <button
+          class="btn btn-outline"
+          onclick={() => (confirmWinnerIndex = null)}
         >
+          Não
+        </button>
       </div>
-      <button class="btn btn-outline" onclick={() => (showMatchResult = false)}
-        >Cancelar</button
-      >
     </div>
   </div>
 {/if}
@@ -712,6 +799,19 @@
     margin: -2px 0 4px;
 
     flex-shrink: 0;
+  }
+
+  .queue-card.clickable {
+    cursor: pointer;
+  }
+
+  .queue-card.clickable:hover {
+    background: #d4eddf;
+    border-color: #4aa86c;
+  }
+
+  .queue-card.clickable:active {
+    transform: scale(0.99);
   }
 
   .reorder-btns {
@@ -919,6 +1019,62 @@
     flex: 1;
   }
 
+  .modal-search {
+    width: 100%;
+
+    padding: 8px 12px;
+
+    border: 1.5px solid #e0e0e0;
+    border-radius: 8px;
+
+    font-size: 0.875rem;
+
+    outline: none;
+
+    transition: border-color 0.15s;
+  }
+
+  .modal-search:focus {
+    border-color: #111;
+  }
+
+  .search-bar {
+    flex-shrink: 0;
+  }
+
+  .search-bar input {
+    width: 100%;
+
+    padding: 8px 12px;
+
+    border: 1.5px solid #e0e0e0;
+    border-radius: 8px;
+
+    font-size: 0.875rem;
+
+    outline: none;
+
+    transition: border-color 0.15s;
+  }
+
+  .search-bar input:focus {
+    border-color: #111;
+  }
+
+  .empty-small {
+    font-size: 0.82rem;
+    color: #aaa;
+    text-align: center;
+    padding: 12px 0;
+  }
+
+  .empty-row {
+    font-size: 0.82rem;
+    color: #aaa;
+    text-align: center;
+    padding: 16px 0;
+  }
+
   .select-list {
     display: flex;
     flex-direction: column;
@@ -958,46 +1114,10 @@
     height: 15px;
   }
 
-  .match-modal {
-    text-align: center;
-  }
-
-  .match-choice {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .winner-btn {
-    flex: 1;
-
-    padding: 16px 10px;
-
-    border-radius: 12px;
-    border: 2px solid #5cb97d;
-
-    background: #e6f5ec;
-    color: #2d7a4f;
-
-    font-size: 0.9rem;
-    font-weight: 700;
-
-    cursor: pointer;
-
-    transition:
-      background 0.12s,
-      transform 0.08s;
-  }
-
-  .winner-btn:hover {
-    background: #d0eddb;
-    transform: scale(1.02);
-  }
-
-  .vs-text {
-    font-size: 0.85rem;
-    font-weight: 700;
-    color: #aaa;
+  .confirm-modal .confirm-text {
+    font-size: 0.95rem;
+    color: #444;
+    line-height: 1.5;
   }
 
   .players-table table {
