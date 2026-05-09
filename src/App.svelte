@@ -8,47 +8,21 @@
   const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
   const RANKS = [
-    {
-      name: "Bronze",
-      min: 0,
-      icon: "ranks/elo_bronze.png",
-    },
-    {
-      name: "Prata",
-      min: 1200,
-      icon: "ranks/elo_prata.png",
-    },
-    {
-      name: "Ouro",
-      min: 1400,
-      icon: "ranks/elo_ouro.png",
-    },
-    {
-      name: "Platina",
-      min: 1600,
-      icon: "ranks/elo_platina.png",
-    },
-    {
-      name: "Diamante",
-      min: 1800,
-      icon: "ranks/elo_diamante.png",
-    },
-    {
-      name: "Mestre",
-      min: 2000,
-      icon: "ranks/elo_mestre.png",
-    },
+    { name: "Bronze", min: 0, icon: "ranks/elo_bronze.png" },
+    { name: "Prata", min: 1200, icon: "ranks/elo_prata.png" },
+    { name: "Ouro", min: 1400, icon: "ranks/elo_ouro.png" },
+    { name: "Platina", min: 1600, icon: "ranks/elo_platina.png" },
+    { name: "Diamante", min: 1800, icon: "ranks/elo_diamante.png" },
+    { name: "Mestre", min: 2000, icon: "ranks/elo_mestre.png" },
   ];
+
+  const STREAK_LIMIT = 5;
 
   function getRank(elo) {
     let currentRank = RANKS[0];
-
     for (const rank of RANKS) {
-      if (elo >= rank.min) {
-        currentRank = rank;
-      }
+      if (elo >= rank.min) currentRank = rank;
     }
-
     return currentRank;
   }
 
@@ -59,7 +33,6 @@
   function updateElo(playerA, playerB, scoreA, K = 64) {
     const Ea = expectedScore(playerA.elo, playerB.elo);
     const Eb = expectedScore(playerB.elo, playerA.elo);
-
     playerA.elo = Math.round(playerA.elo + K * (scoreA - Ea));
     playerB.elo = Math.round(playerB.elo + K * (1 - scoreA - Eb));
   }
@@ -89,14 +62,7 @@
   async function insertPlayer(name) {
     const { data, error } = await supabase
       .from("players")
-      .insert({
-        name,
-        win: 0,
-        lose: 0,
-        total: 0,
-        win_rate: 0,
-        elo: 1000,
-      })
+      .insert({ name, win: 0, lose: 0, total: 0, win_rate: 0, elo: 1000 })
       .select()
       .single();
 
@@ -165,6 +131,9 @@
   let players = $state([]);
   let queue = $state([]);
 
+  let streaks = $state({});
+  let streakEnabled = $state(true);
+
   let showAddPlayer = $state(false);
   let showAddToQueue = $state(false);
   let showRemoveFromQueue = $state(false);
@@ -186,21 +155,21 @@
     players = [...players].sort((a, b) => b.elo - a.elo);
   }
 
+  function getStreak(player) {
+    return streaks[player.id] ?? 0;
+  }
+
   async function confirmAddPlayer() {
     if (isAddingPlayer) return;
-
     if (!newPlayerName.trim()) return;
 
     isAddingPlayer = true;
-
     const playerName = newPlayerName.trim();
-
     newPlayerName = "";
     showAddPlayer = false;
 
     try {
       const newPlayer = await insertPlayer(playerName);
-
       if (newPlayer) {
         players = [...players, newPlayer];
         sortPlayers();
@@ -214,16 +183,13 @@
     const toAdd = players.filter(
       (p) => selectedToAdd.includes(p.name) && !queue.includes(p),
     );
-
     queue = [...queue, ...toAdd];
-
     selectedToAdd = [];
     showAddToQueue = false;
   }
 
   function confirmRemoveFromQueue() {
     queue = queue.filter((p) => !selectedToRemove.includes(p.name));
-
     selectedToRemove = [];
     showRemoveFromQueue = false;
   }
@@ -234,21 +200,15 @@
 
   function moveUp(i) {
     if (i === 0) return;
-
     const newQueue = [...queue];
-
     [newQueue[i - 1], newQueue[i]] = [newQueue[i], newQueue[i - 1]];
-
     queue = newQueue;
   }
 
   function moveDown(i) {
     if (i === queue.length - 1) return;
-
     const newQueue = [...queue];
-
     [newQueue[i], newQueue[i + 1]] = [newQueue[i + 1], newQueue[i]];
-
     queue = newQueue;
   }
 
@@ -265,10 +225,8 @@
 
       winner.win++;
       loser.lose++;
-
       winner.total = winner.win + winner.lose;
       loser.total = loser.win + loser.lose;
-
       winner.winRate = winner.win / winner.total;
       loser.winRate = loser.win / loser.total;
 
@@ -276,18 +234,40 @@
 
       await Promise.all([updatePlayerStats(winner), updatePlayerStats(loser)]);
 
+      const newStreakWinner = (streaks[winner.id] ?? 0) + 1;
+      const updatedStreaks = {
+        ...streaks,
+        [winner.id]: newStreakWinner,
+        [loser.id]: 0,
+      };
+      streaks = updatedStreaks;
+
       const newQueue = [...queue];
+      const shouldExile = streakEnabled && newStreakWinner >= STREAK_LIMIT;
 
       if (winnerIndex === 0) {
         newQueue.splice(1, 1);
-        newQueue.push(loser);
+        if (shouldExile) {
+          newQueue.splice(0, 1);
+          newQueue.push(loser);
+          newQueue.push(winner);
+          streaks = { ...streaks, [winner.id]: 0 };
+        } else {
+          newQueue.push(loser);
+        }
       } else {
         newQueue.splice(0, 1);
-        newQueue.push(loser);
+        if (shouldExile) {
+          newQueue.splice(0, 1);
+          newQueue.unshift(loser);
+          newQueue.push(winner);
+          streaks = { ...streaks, [winner.id]: 0 };
+        } else {
+          newQueue.push(loser);
+        }
       }
 
       queue = newQueue;
-
       sortPlayers();
     } finally {
       isRecordingMatch = false;
@@ -302,7 +282,20 @@
 <div class="app">
   <main>
     <section class="panel queue-panel">
-      <h2>Fila</h2>
+      <div class="panel-header">
+        <h2>Fila</h2>
+        <button
+          class="streak-toggle"
+          class:active={streakEnabled}
+          onclick={() => (streakEnabled = !streakEnabled)}
+          title={streakEnabled
+            ? "Desativar sistema de Aura"
+            : "Ativar sistema de Aura"}
+        >
+          <span class="streak-icon">✦</span>
+          AURA {streakEnabled ? "ON" : "OFF"}
+        </button>
+      </div>
 
       <div class="queue-list">
         {#if queue.length === 0}
@@ -310,43 +303,52 @@
         {/if}
 
         {#each queue as player, i}
+          {@const streak = getStreak(player)}
           {#if i < 2 && queue.length >= 2}
-            <div
-              class="queue-card active clickable"
-              role="button"
-              tabindex="0"
-              onclick={() => (confirmWinnerIndex = i)}
-              onkeydown={(e) => {
-                if (e.key === "Enter") confirmWinnerIndex = i;
-              }}
-            >
-              <span class="pos">{i + 1}</span>
-              <span class="pname">{player.name}</span>
-
-              <div class="reorder-btns">
-                <button
-                  class="arrow-btn"
-                  onclick={(e) => {
-                    e.stopPropagation();
-                    moveUp(i);
-                  }}
-                  disabled={i === 0}>▲</button
+            <div class="queue-card-wrapper">
+              {#if streakEnabled && streak > 0}
+                <div
+                  class="aura-badge"
+                  style="--aura-level: {Math.min(streak / STREAK_LIMIT, 1)}"
                 >
-                <button
-                  class="arrow-btn"
-                  onclick={(e) => {
-                    e.stopPropagation();
-                    moveDown(i);
-                  }}
-                  disabled={i === queue.length - 1}>▼</button
-                >
+                  AURA {streak * 100}
+                </div>
+              {/if}
+              <div
+                class="queue-card active clickable"
+                role="button"
+                tabindex="0"
+                onclick={() => (confirmWinnerIndex = i)}
+                onkeydown={(e) => {
+                  if (e.key === "Enter") confirmWinnerIndex = i;
+                }}
+              >
+                <span class="pos">{i + 1}</span>
+                <span class="pname">{player.name}</span>
+                <div class="reorder-btns">
+                  <button
+                    class="arrow-btn"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      moveUp(i);
+                    }}
+                    disabled={i === 0}>▲</button
+                  >
+                  <button
+                    class="arrow-btn"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      moveDown(i);
+                    }}
+                    disabled={i === queue.length - 1}>▼</button
+                  >
+                </div>
               </div>
             </div>
           {:else}
             <div class="queue-card">
               <span class="pos">{i + 1}</span>
               <span class="pname">{player.name}</span>
-
               <div class="reorder-btns">
                 <button
                   class="arrow-btn"
@@ -361,6 +363,7 @@
               </div>
             </div>
           {/if}
+
           {#if i === 0 && queue.length > 1}
             <div class="vs-divider">vs</div>
           {/if}
@@ -427,21 +430,17 @@
             <tbody>
               {#each filteredPlayers as p, i}
                 {@const rank = getRank(p.elo)}
-
                 <tr>
                   <td>{i + 1}</td>
-
                   <td>
                     <div class="player-name">
                       <img src={rank.icon} alt={rank.name} class="rank-icon" />
-
                       <div class="player-info">
                         <span>{p.name}</span>
                         <span class="rank-label">{rank.name}</span>
                       </div>
                     </div>
                   </td>
-
                   <td>{p.win}</td>
                   <td>{p.lose}</td>
                   <td>{p.total}</td>
@@ -450,11 +449,11 @@
                 </tr>
               {/each}
               {#if filteredPlayers.length === 0}
-                <tr>
-                  <td colspan="7" class="empty-row"
+                <tr
+                  ><td colspan="7" class="empty-row"
                     >Nenhum resultado encontrado.</td
-                  >
-                </tr>
+                  ></tr
+                >
               {/if}
             </tbody>
           </table>
@@ -640,10 +639,8 @@
         </button>
         <button
           class="btn btn-outline"
-          onclick={() => (confirmWinnerIndex = null)}
+          onclick={() => (confirmWinnerIndex = null)}>Não</button
         >
-          Não
-        </button>
       </div>
     </div>
   </div>
@@ -687,13 +684,18 @@
     border: 1px solid #e4e4e4;
     border-radius: 14px;
     padding: 20px;
-
     display: flex;
     flex-direction: column;
     gap: 14px;
-
     height: 80vh;
     min-height: 0;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
   }
 
   h2 {
@@ -702,20 +704,108 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: #888;
+  }
 
-    flex-shrink: 0;
+  .streak-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 11px;
+    border-radius: 20px;
+    border: 1.5px solid #c4aff0;
+    background: #f5f0ff;
+    color: #7c3aed;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    transition:
+      background 0.15s,
+      border-color 0.15s,
+      color 0.15s,
+      box-shadow 0.15s;
+  }
+
+  .streak-toggle:hover {
+    background: #ede9fe;
+    border-color: #a78bfa;
+  }
+
+  .streak-toggle.active {
+    background: linear-gradient(135deg, #7c3aed, #6d28d9);
+    border-color: #6d28d9;
+    color: #fff;
+  }
+
+  .streak-toggle.active:hover {
+    background: linear-gradient(135deg, #6d28d9, #5b21b6);
+  }
+
+  .streak-icon {
+    font-size: 0.8rem;
+    line-height: 1;
+  }
+
+  .queue-card-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-bottom: 6px;
+  }
+
+  .queue-card-wrapper .queue-card {
+    margin-bottom: 0;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
+
+  .aura-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+
+    background: #f3efff;
+    color: #6d28d9;
+
+    border: none;
+    border-bottom: 1.5px solid #d6ccff;
+
+    border-radius: 10px 10px 0 0;
+
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  @keyframes aura-pulse {
+    0%,
+    100% {
+      box-shadow: 0 -2px 8px rgba(109, 40, 217, 0.15);
+    }
+    50% {
+      box-shadow: 0 -2px 16px rgba(109, 40, 217, 0.35);
+    }
+  }
+
+  @keyframes blink {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.3;
+    }
   }
 
   .empty {
     flex: 1;
-
     display: flex;
     align-items: center;
     justify-content: center;
-
     font-size: 0.85rem;
     color: #aaa;
-
     text-align: center;
   }
 
@@ -723,10 +813,8 @@
   .players-table {
     flex: 1;
     min-height: 0;
-
     overflow-y: auto;
     overflow-x: auto;
-
     padding-right: 4px;
   }
 
@@ -735,13 +823,11 @@
     width: 8px;
     height: 8px;
   }
-
   .queue-list::-webkit-scrollbar-thumb,
   .players-table::-webkit-scrollbar-thumb {
     background: #d0d0d0;
     border-radius: 999px;
   }
-
   .queue-list::-webkit-scrollbar-thumb:hover,
   .players-table::-webkit-scrollbar-thumb:hover {
     background: #b8b8b8;
@@ -757,18 +843,12 @@
     display: flex;
     align-items: center;
     gap: 10px;
-
     padding: 10px 12px;
-
     border-radius: 10px;
     border: 1.5px solid #e4e4e4;
-
     background: #fafafa;
-
     margin-bottom: 6px;
-
     transition: background 0.15s;
-
     flex-shrink: 0;
   }
 
@@ -797,19 +877,16 @@
     color: #5cb97d;
     letter-spacing: 0.1em;
     margin: -2px 0 4px;
-
     flex-shrink: 0;
   }
 
   .queue-card.clickable {
     cursor: pointer;
   }
-
   .queue-card.clickable:hover {
     background: #d4eddf;
     border-color: #4aa86c;
   }
-
   .queue-card.clickable:active {
     transform: scale(0.99);
   }
@@ -824,34 +901,24 @@
     display: flex;
     align-items: center;
     justify-content: center;
-
     width: 22px;
     height: 18px;
-
     border: 1px solid #ddd;
     border-radius: 4px;
-
     background: transparent;
-
     color: #888;
     font-size: 0.6rem;
-
     cursor: pointer;
-
     padding: 0;
-
     line-height: 1;
-
     transition:
       background 0.1s,
       color 0.1s;
   }
-
   .arrow-btn:hover:not(:disabled) {
     background: #f0f0f0;
     color: #111;
   }
-
   .arrow-btn:disabled {
     opacity: 0.2;
     cursor: not-allowed;
@@ -862,35 +929,25 @@
     align-items: center;
     justify-content: center;
     gap: 6px;
-
     width: 100%;
-
     padding: 9px 16px;
-
     border-radius: 8px;
     border: 1.5px solid #111;
-
     background: #111;
     color: #fff;
-
     font-size: 0.83rem;
     font-weight: 600;
-
     cursor: pointer;
-
     transition:
       background 0.12s,
       transform 0.08s;
   }
-
   .btn:hover {
     background: #333;
   }
-
   .btn:active {
     transform: scale(0.98);
   }
-
   .btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
@@ -900,7 +957,6 @@
     background: transparent;
     color: #111;
   }
-
   .btn-outline:hover {
     background: #f0f0f0;
   }
@@ -910,7 +966,6 @@
     color: #c0392b;
     border-color: #c0392b;
   }
-
   .btn-danger:hover {
     background: #fdf0ef;
   }
@@ -919,10 +974,8 @@
     background: #5cb97d;
     border-color: #5cb97d;
     color: #fff;
-
     flex-shrink: 0;
   }
-
   .btn-match:hover {
     background: #4aa86c;
   }
@@ -932,24 +985,18 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-
     margin-top: auto;
-
     flex-shrink: 0;
   }
 
   .overlay {
     position: fixed;
     inset: 0;
-
     background: rgba(0, 0, 0, 0.25);
-
     z-index: 100;
-
     border: none;
     padding: 0;
     margin: 0;
-
     cursor: pointer;
   }
 
@@ -961,27 +1008,18 @@
 
   .modal {
     position: fixed;
-
     top: 50%;
     left: 50%;
-
     transform: translate(-50%, -50%);
-
     width: 100%;
     max-width: 360px;
-
     background: #fff;
-
     border-radius: 16px;
-
     padding: 28px 24px 22px;
-
     box-shadow: 0 8px 40px rgba(0, 0, 0, 0.12);
-
     display: flex;
     flex-direction: column;
     gap: 16px;
-
     z-index: 101;
   }
 
@@ -993,19 +1031,13 @@
 
   .modal input[type="text"] {
     width: 100%;
-
     padding: 10px 12px;
-
     border: 1.5px solid #e0e0e0;
     border-radius: 8px;
-
     font-size: 0.95rem;
-
     outline: none;
-
     transition: border-color 0.15s;
   }
-
   .modal input[type="text"]:focus {
     border-color: #111;
   }
@@ -1014,26 +1046,19 @@
     display: flex;
     gap: 8px;
   }
-
   .modal-actions .btn {
     flex: 1;
   }
 
   .modal-search {
     width: 100%;
-
     padding: 8px 12px;
-
     border: 1.5px solid #e0e0e0;
     border-radius: 8px;
-
     font-size: 0.875rem;
-
     outline: none;
-
     transition: border-color 0.15s;
   }
-
   .modal-search:focus {
     border-color: #111;
   }
@@ -1041,22 +1066,15 @@
   .search-bar {
     flex-shrink: 0;
   }
-
   .search-bar input {
     width: 100%;
-
     padding: 8px 12px;
-
     border: 1.5px solid #e0e0e0;
     border-radius: 8px;
-
     font-size: 0.875rem;
-
     outline: none;
-
     transition: border-color 0.15s;
   }
-
   .search-bar input:focus {
     border-color: #111;
   }
@@ -1079,9 +1097,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-
     max-height: 240px;
-
     overflow-y: auto;
   }
 
@@ -1089,27 +1105,19 @@
     display: flex;
     align-items: center;
     gap: 10px;
-
     padding: 9px 12px;
-
     border-radius: 8px;
     border: 1.5px solid #e8e8e8;
-
     cursor: pointer;
-
     font-size: 0.9rem;
     font-weight: 500;
-
     transition: background 0.1s;
   }
-
   .select-item:hover {
     background: #f5f5f5;
   }
-
   .select-item input {
     accent-color: #111;
-
     width: 15px;
     height: 15px;
   }
@@ -1129,23 +1137,16 @@
   .players-table thead th {
     position: sticky;
     top: 0;
-
     background: #fff;
-
     z-index: 1;
   }
 
   .players-table th {
     text-align: left;
-
     font-size: 0.7rem;
-
     text-transform: uppercase;
-
     color: #888;
-
     padding: 6px 4px;
-
     letter-spacing: 0.1em;
   }
 
@@ -1178,9 +1179,7 @@
   .rank-icon {
     width: 28px;
     height: 28px;
-
     object-fit: contain;
-
     flex-shrink: 0;
   }
 
@@ -1188,9 +1187,7 @@
     font-size: 0.68rem;
     color: #888;
     font-weight: 600;
-
     text-transform: uppercase;
-
     letter-spacing: 0.06em;
   }
 </style>
